@@ -3,6 +3,8 @@ Minimal tenant resolver for authentication.
 """
 from typing import Optional
 import logging
+from jose import jwt, JWTError
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +23,17 @@ class TenantResolver:
         Returns:
             Tenant ID if found, None otherwise
         """
-        # Try user_metadata first (most common location)
-        if 'user_metadata' in token_payload:
-            tenant_id = token_payload['user_metadata'].get('tenant_id')
-            if tenant_id:
-                return tenant_id
+        # Try app_metadata first
+        app_metadata = token_payload.get('app_metadata') or {}
+        tenant_id = app_metadata.get('tenant_id')
+        if tenant_id:
+            return tenant_id
 
-        # Try app_metadata as fallback
-        if 'app_metadata' in token_payload:
-            tenant_id = token_payload['app_metadata'].get('tenant_id')
-            if tenant_id:
-                return tenant_id
+        # Try user_metadata as fallback
+        user_metadata = token_payload.get('user_metadata') or {}
+        tenant_id = user_metadata.get('tenant_id')
+        if tenant_id:
+            return tenant_id
 
         # Try root level
         tenant_id = token_payload.get('tenant_id')
@@ -69,17 +71,8 @@ class TenantResolver:
         return None
 
     @staticmethod
-    async def resolve_tenant_id(user_id: str, user_email: str, token: Optional[str] = None) -> str:
-        """
-        Resolve tenant ID for a user.
-        
-        Args:
-            user_id: User ID
-            user_email: User email
-            
-        Returns:
-            Tenant ID
-        """
+    async def resolve_tenant_id(user_id: str, user_email: str, token: Optional[str] = None) -> Optional[str]:
+        """Resolve tenant ID for a user."""
         # Fallback mapping by known user email.
         if user_email == "sunset@propertyflow.com":
             return "tenant-a"
@@ -88,8 +81,16 @@ class TenantResolver:
         if user_email == "candidate@propertyflow.com":
             return "tenant-a"
             
-        # Default fallback
-        return "tenant-a"
+        if token:
+            try:
+                payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"], audience="authenticated")
+                tenant_id = TenantResolver.resolve_tenant_from_token(payload)
+                if tenant_id:
+                    return tenant_id
+            except JWTError:
+                pass
+
+        return None
 
     @staticmethod
     async def update_user_tenant_metadata(user_id: str, tenant_id: str) -> None:
